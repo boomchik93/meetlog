@@ -1,0 +1,31 @@
+services:
+  transcriber:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./OUTPUTS:/app/OUTPUTS    # готовые разборы (папки с JSON)
+      - ./models:/models          # скачанные модели (кешируются между запусками)
+      - ./data:/data              # БД метрик и событий задач
+    environment:
+      - CONFIG_PATH=config/config.yml
+      - DEVICE=cpu                 # принудительно CPU
+      - WHISPER_MODEL=large-v3     # точность; для скорости: medium / small
+      - HUGGINGFACE_HUB_CACHE=/models
+      - HF_HOME=/models
+      - METRICS_DB=/data/metrics.db
+    restart: unless-stopped
+
+  # постоянный сборщик метрик хоста -> /data/metrics.db
+  collector:
+    build: .
+    command: ["python", "collector.py"]
+    volumes:
+      - ./data:/data
+      - /:/rootfs:ro              # хостовая ФС только для чтения (диски)
+    environment:
+      - PYTHONPATH=/app/src
+      - METRICS_DB=/data/metrics.db
+      - COLLECT_INTERVAL=10
+      - PRUNE_DAYS=30
+    restart: unless-stopped
