@@ -6,12 +6,13 @@
 <title>Транскрибатор</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; line-height: 1.5; }
+  body { font-family: system-ui, sans-serif; max-width: 820px; margin: 40px auto; padding: 0 16px; line-height: 1.5; }
   h1 { font-size: 1.5rem; }
   .card { border: 1px solid #8884; border-radius: 10px; padding: 20px; margin-top: 16px; }
   input[type=file] { width: 100%; }
   button { padding: 10px 18px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font-size: 1rem; cursor: pointer; margin-top: 12px; }
   button:disabled { background: #888; cursor: default; }
+  button.sec { background: #6b7280; }
   .muted { color: #888; font-size: .9rem; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   pre { background: #8881; padding: 12px; border-radius: 8px; overflow: auto; max-height: 320px; font-size: .85rem; }
@@ -20,85 +21,197 @@
   .ok { color: #16a34a; }
   .spin { display: inline-block; width: 16px; height: 16px; border: 3px solid #8884; border-top-color: #2563eb; border-radius: 50%; animation: s 1s linear infinite; vertical-align: middle; }
   @keyframes s { to { transform: rotate(360deg); } }
+
+  .tabs { display: flex; gap: 4px; margin-top: 24px; border-bottom: 2px solid #8882; }
+  .tab { padding: 8px 20px; cursor: pointer; border-radius: 8px 8px 0 0; border: 1px solid transparent; border-bottom: none; color: #888; background: none; font-size: 1rem; margin-top: 0; }
+  .tab.active { color: inherit; border-color: #8882; border-bottom-color: transparent; background: var(--bg, #fff); position: relative; bottom: -2px; }
+  @media (prefers-color-scheme: dark) { .tab.active { --bg: #1e1e1e; } }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .hist-item { border: 1px solid #8882; border-radius: 8px; padding: 14px 16px; margin-top: 10px; cursor: pointer; transition: background .15s; }
+  .hist-item:hover { background: #8881; }
+  .hist-title { font-weight: 600; margin-bottom: 4px; }
+  .hist-meta { color: #888; font-size: .85rem; }
+  .hist-summary { margin-top: 6px; font-size: .9rem; color: #555; }
+  @media (prefers-color-scheme: dark) { .hist-summary { color: #aaa; } }
+  .detail-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; }
 </style>
 </head>
 <body>
-  <h1>🎙 Транскрибатор</h1>
-  <p class="muted">Загрузите аудиозапись разговора — получите транскрибацию, спикеров и структурированный разбор (темы, решения, задачи, риски).</p>
+  <h1>Транскрибатор</h1>
 
-  <div class="card">
-    <input type="file" id="file" accept=".mp3,.wav,.m4a,.ogg,.flac,.webm">
-    <div class="row">
-      <button id="go">Обработать</button>
-      <span id="status" class="muted"></span>
-    </div>
-    <p class="muted">Поддерживаются: mp3, wav, m4a, ogg, flac, webm. Обработка на CPU может занять время.</p>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('upload')">Загрузить</button>
+    <button class="tab" onclick="switchTab('history')">История</button>
   </div>
 
-  <div id="result" class="card hidden">
-    <div class="row">
-      <button id="download">⬇ Скачать JSON</button>
-      <span id="saved" class="muted"></span>
+  <!-- Панель загрузки -->
+  <div id="panel-upload" class="panel active">
+    <div class="card">
+      <input type="file" id="file" accept=".mp3,.wav,.m4a,.ogg,.flac,.webm">
+      <div class="row">
+        <button id="go">Обработать</button>
+        <span id="status" class="muted"></span>
+      </div>
+      <p class="muted">Поддерживаются: mp3, wav, m4a, ogg, flac, webm.<br>
+        Файл уходит в очередь и обрабатывается на сервере — можно закрыть вкладку и вернуться позже через раздел «История».</p>
     </div>
-    <h3 id="rtitle"></h3>
-    <p id="rsummary"></p>
-    <pre id="rjson"></pre>
+
+    <div id="queued-card" class="card hidden">
+      <p>Файл принят в обработку: <strong id="q-filename"></strong></p>
+      <p class="muted">Статус: <span id="q-status">в очереди</span></p>
+      <div class="row">
+        <button id="q-open" class="sec hidden">Открыть результат в истории</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Панель истории -->
+  <div id="panel-history" class="panel">
+    <div class="card">
+      <div class="row">
+        <button onclick="loadHistory()" class="sec" style="margin-top:0">Обновить</button>
+        <span id="hist-status" class="muted"></span>
+      </div>
+    </div>
+    <div id="hist-list"></div>
+
+    <div id="detail-card" class="card hidden">
+      <div class="detail-header">
+        <div>
+          <h3 id="d-title" style="margin:0"></h3>
+          <div class="muted" id="d-meta"></div>
+        </div>
+        <button id="d-download" class="sec" style="margin-top:0">Скачать JSON</button>
+      </div>
+      <p id="d-summary" style="margin-top:12px"></p>
+      <pre id="d-json"></pre>
+    </div>
   </div>
 
 <script>
-const $ = (id) => document.getElementById(id);
-let lastResult = null, lastName = "result";
+const $ = id => document.getElementById(id);
+let pollTimer = null;
 
-$("go").onclick = async () => {
-  const f = $("file").files[0];
-  if (!f) { setStatus("Выберите файл", true); return; }
-  lastName = f.name.replace(/\.[^.]+$/, "");
-  $("go").disabled = true;
-  $("result").classList.add("hidden");
-  setStatus('<span class="spin"></span> обработка… не закрывайте вкладку');
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', ['upload','history'][i] === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  $('panel-' + name).classList.add('active');
+  if (name === 'history') loadHistory();
+}
+
+$('go').onclick = async () => {
+  const f = $('file').files[0];
+  if (!f) { setStatus('Выберите файл', true); return; }
+
+  $('go').disabled = true;
+  $('queued-card').classList.add('hidden');
+  setStatus('<span class="spin"></span> отправляю…');
 
   const fd = new FormData();
-  fd.append("file", f);
+  fd.append('file', f);
   try {
-    const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+    const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
     if (!res.ok) {
       const t = await res.text();
-      setStatus("Ошибка: " + t.slice(0, 300), true);
-    } else {
-      lastResult = await res.json();
-      showResult(lastResult);
-      setStatus("Готово", false, true);
+      setStatus('Ошибка: ' + t.slice(0, 300), true);
+      return;
     }
+    const data = await res.json();
+    $('q-filename').textContent = f.name;
+    $('q-status').textContent = 'в очереди';
+    $('q-open').classList.add('hidden');
+    $('queued-card').classList.remove('hidden');
+    setStatus('Файл принят', false, true);
+    startPolling(data.job_id);
   } catch (e) {
-    setStatus("Сбой запроса: " + e, true);
+    setStatus('Сбой запроса: ' + e, true);
   } finally {
-    $("go").disabled = false;
+    $('go').disabled = false;
   }
 };
 
-$("download").onclick = () => {
-  if (!lastResult) return;
-  const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = lastName + ".json";
-  a.click();
-  URL.revokeObjectURL(a.href);
-};
-
-function setStatus(html, isErr, isOk) {
-  const s = $("status");
-  s.innerHTML = html;
-  s.className = isErr ? "err" : (isOk ? "ok" : "muted");
+function startPolling(jobId) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/jobs/' + jobId);
+      if (!res.ok) return;
+      const job = await res.json();
+      const labels = { queued: 'в очереди', processing: 'обрабатывается…', done: 'готово', error: 'ошибка' };
+      $('q-status').textContent = labels[job.status] || job.status;
+      if (job.status === 'done') {
+        clearInterval(pollTimer);
+        $('q-open').classList.remove('hidden');
+        $('q-open').onclick = () => switchTab('history');
+      } else if (job.status === 'error') {
+        clearInterval(pollTimer);
+        $('q-status').textContent = 'ошибка: ' + (job.error || '');
+      }
+    } catch (_) {}
+  }, 5000);
 }
 
-function showResult(d) {
-  $("result").classList.remove("hidden");
-  const s = d.summary || {};
-  $("rtitle").textContent = s.title || "(тема не определена)";
-  $("rsummary").textContent = s.summary || "";
-  $("saved").textContent = d.saved_to ? ("сохранено на сервере: " + d.saved_to) : "";
-  $("rjson").textContent = JSON.stringify(d, null, 2);
+function setStatus(html, isErr, isOk) {
+  const s = $('status');
+  s.innerHTML = html;
+  s.className = isErr ? 'err' : (isOk ? 'ok' : 'muted');
+}
+
+async function loadHistory() {
+  $('hist-status').textContent = 'загружаю…';
+  $('hist-list').innerHTML = '';
+  $('detail-card').classList.add('hidden');
+  try {
+    const res = await fetch('/api/history');
+    const items = await res.json();
+    $('hist-status').textContent = items.length ? items.length + ' записей' : 'пусто';
+    if (!items.length) {
+      $('hist-list').innerHTML = '<p class="muted" style="margin-top:16px">Обработанных файлов пока нет.</p>';
+      return;
+    }
+    items.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'hist-item';
+      const date = item.modified_at.replace('T', ' ');
+      div.innerHTML =
+        '<div class="hist-title">' + esc(item.title || item.filename) + '</div>' +
+        '<div class="hist-meta">' + esc(item.folder) + ' &nbsp;·&nbsp; ' + date + ' &nbsp;·&nbsp; ' + item.size_kb + ' КБ</div>' +
+        (item.summary_text ? '<div class="hist-summary">' + esc(item.summary_text.slice(0, 200)) + (item.summary_text.length > 200 ? '…' : '') + '</div>' : '');
+      div.onclick = () => openDetail(item);
+      $('hist-list').appendChild(div);
+    });
+  } catch (e) {
+    $('hist-status').textContent = 'ошибка загрузки';
+  }
+}
+
+async function openDetail(item) {
+  $('d-title').textContent = item.title || item.filename;
+  $('d-meta').textContent = item.folder + ' · ' + item.modified_at.replace('T', ' ') + ' · ' + item.size_kb + ' КБ';
+  $('d-summary').textContent = item.summary_text || '';
+  $('d-json').textContent = 'загружаю…';
+  $('detail-card').classList.remove('hidden');
+  $('detail-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  $('d-download').onclick = () => {
+    window.location.href = '/api/history/download?path=' + encodeURIComponent(item.path);
+  };
+
+  try {
+    const res = await fetch('/api/history/download?path=' + encodeURIComponent(item.path));
+    const data = await res.json();
+    $('d-json').textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    $('d-json').textContent = 'ошибка загрузки';
+  }
+}
+
+function esc(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 </script>
 </body>

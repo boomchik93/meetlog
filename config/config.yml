@@ -86,6 +86,6 @@ overrides:
   # Сколько слоёв LLM положить на GPU. -1 = все, 0 = только CPU.
   llm_gpu_layers: null
   # Размер контекста LLM (в токенах). Больше = больше памяти.
-  llm_context: null
+  llm_context: 16384
   # Потоки для LLM.
   llm_threads: null
