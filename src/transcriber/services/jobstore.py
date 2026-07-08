@@ -1,16 +1,3 @@
-"""
-Персистентное хранилище задач и логов (SQLite).
-
-Зачем: очередь и статусы задач раньше жили только в оперативной памяти.
-Любой перезапуск процесса (перезагрузка, docker restart, нехватка памяти)
-терял всё, что не успело досчитаться: файл пропадал из вкладки процессов
-и не появлялся в истории. Теперь задача пишется на диск сразу при приёме,
-а загруженный аудиофайл сохраняется в постоянную папку, а не в /tmp. При
-старте сервера незавершённые задачи возвращаются в очередь и досчитываются.
-
-Одна БД на весь проект: таблица jobs (жизненный цикл задач) и таблица logs
-(события обработки — тот самый журнал вместо разрозненных print в консоль).
-"""
 import json
 import os
 import sqlite3
@@ -37,8 +24,6 @@ def _now():
 
 
 class JobStore:
-    """Обёртка над SQLite. Потокобезопасна: один lock на запись."""
-
     def __init__(self, db_path=DB_PATH, uploads_dir=UPLOADS_DIR):
         self.db_path = db_path
         self.uploads_dir = uploads_dir
@@ -88,7 +73,6 @@ class JobStore:
     # --- задачи ---
 
     def create_job(self, filename, upload_path):
-        """Регистрируем задачу в статусе queued. Возвращает job_id."""
         job_id = str(uuid.uuid4())
         with self._lock:
             self._conn.execute(
@@ -129,7 +113,7 @@ class JobStore:
         return self._row_to_job(row) if row else None
 
     def active_jobs(self):
-        """Задачи в работе или в очереди — для вкладки процессов."""
+        # задачи в очереди или в работе — для вкладки процессов
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE status IN (?, ?) ORDER BY submitted_at",
@@ -138,7 +122,7 @@ class JobStore:
         return [self._row_to_job(r) for r in rows]
 
     def unfinished_jobs(self):
-        """Незавершённые задачи для восстановления при старте (сначала старые)."""
+        # незавершённые задачи для восстановления при старте, сначала старые
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE status IN (?, ?) ORDER BY submitted_at",
@@ -147,7 +131,7 @@ class JobStore:
         return [self._row_to_job(r) for r in rows]
 
     def requeue(self, job_id):
-        """Вернуть прерванную задачу обратно в очередь (сброс в queued)."""
+        # вернуть прерванную задачу обратно в очередь
         with self._lock:
             self._conn.execute(
                 "UPDATE jobs SET status=?, started_at=NULL WHERE id=?",
@@ -188,5 +172,4 @@ class JobStore:
         return [dict(r) for r in rows]
 
 
-# один общий экземпляр на весь проект
 store = JobStore()

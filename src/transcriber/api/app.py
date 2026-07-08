@@ -20,14 +20,11 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "OUTPUTS")
 
 pipeline = Pipeline()
 
-# очередь для последовательной обработки (одна задача за раз).
-# сама очередь в памяти, но каждая задача продублирована в БД (store):
-# при перезапуске незавершённые задачи восстанавливаются из БД в эту очередь.
+# очередь в памяти, но каждая задача продублирована в БД (store)
 job_queue: asyncio.Queue = asyncio.Queue()
 
 
 def _log(message, tag=None, job_id=None, level="info"):
-    """Пишем и в консоль (как раньше), и в БД-журнал."""
     print(message)
     try:
         store.log(message, level=level, tag=tag, job_id=job_id)
@@ -60,7 +57,7 @@ async def worker():
 
 
 def _recover_unfinished():
-    """При старте возвращаем в очередь задачи, прерванные перезапуском."""
+    # при старте возвращаем в очередь задачи, прерванные перезапуском
     pending = store.unfinished_jobs()
     if not pending:
         return
@@ -150,13 +147,12 @@ def job_status(job_id: str):
 
 @app.get("/api/jobs")
 def jobs_list():
-    """Активные задачи (в очереди и в работе) — для вкладки процессов."""
+    # активные задачи (в очереди и в работе) для вкладки процессов
     return JSONResponse(store.active_jobs())
 
 
 @app.get("/api/logs")
 def logs(limit: int = 200, job_id: str = None):
-    """Журнал обработки из БД."""
     return JSONResponse(store.recent_logs(limit=limit, job_id=job_id))
 
 
