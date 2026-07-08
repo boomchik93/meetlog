@@ -29,7 +29,7 @@ hardware:
   vram_gb: 11
 
   # Сколько оперативной памяти в гигабайтах.
-  ram_gb: 15
+  ram_gb: 30
 
   # Сколько ядер процессора использовать.
   # "auto" = взять все доступные.
@@ -38,7 +38,7 @@ hardware:
 # --- Модель распознавания речи (Whisper) ---
 whisper:
   # Движок: whispercpp (GPU, под Pascal) | faster (faster-whisper, CPU/GPU)
-  engine: "whispercpp"
+  engine: "faster"
 
   # Модель whisper.cpp в формате ggml (качается при первом запуске).
   ggml_repo: "ggerganov/whisper.cpp"

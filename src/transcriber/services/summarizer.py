@@ -17,11 +17,23 @@ EMPTY_RESULT = {
 
 RESULT_FIELDS = ["title", "summary", "topics", "decisions", "action_items", "risks"]
 
-# сколько символов транскрипта максимум отдаём модели
-# контекст 16384 токенов, в русском ~4 символа на токен = ~65000 символов
-# оставляем запас под системный промпт (~1500 токенов) и ответ (~2048 токенов)
-# итого под транскрипт: ~12000 токенов = ~48000 символов
-MAX_TRANSCRIPT_CHARS = 48000
+# Сколько символов транскрипта максимум отдаём модели.
+# Считаем НЕ хардкодом, а от реального контекста модели (settings.llm_context).
+# Важно: у Qwen кириллица с метками SPEAKER_XX токенизируется плотно — по факту
+# ~2.8 символа на токен, а не 4. Прежняя оценка (4 симв/токен, 48000 символов)
+# давала запрос на ~16457 токенов при контексте 16384 — модель падала с
+# "Requested tokens exceed context window". Берём консервативно.
+CHARS_PER_TOKEN = 2.8          # безопасная оценка для русского с разметкой спикеров
+RESERVE_PROMPT_TOKENS = 1200   # системный промпт + обёртка user-сообщения
+RESERVE_ANSWER_TOKENS = 2048   # max_tokens ответа модели
+
+
+def _max_transcript_chars():
+    """Бюджет символов под транскрипт с запасом под промпт и ответ."""
+    budget_tokens = settings.llm_context - RESERVE_PROMPT_TOKENS - RESERVE_ANSWER_TOKENS
+    if budget_tokens < 1000:
+        budget_tokens = 1000  # совсем маленький контекст — хоть что-то отдаём
+    return int(budget_tokens * CHARS_PER_TOKEN)
 
 
 CORRECTION_PROMPT = """Ты — редактор автоматических расшифровок телефонных разговоров.
@@ -197,8 +209,9 @@ class Summarizer:
         return self._parse_speaker_names(answer, pieces)
 
     def _clip(self, transcript):
-        if len(transcript) > MAX_TRANSCRIPT_CHARS:
-            return transcript[:MAX_TRANSCRIPT_CHARS] + "\n[...текст обрезан...]"
+        limit = _max_transcript_chars()
+        if len(transcript) > limit:
+            return transcript[:limit] + "\n[...текст обрезан...]"
         return transcript
 
     # собираем реплики в один текст помечая смену говорящего

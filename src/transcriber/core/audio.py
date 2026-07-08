@@ -1,3 +1,14 @@
+"""
+Загрузка и подготовка аудио.
+
+Класс AudioLoader умеет открыть файл, привести его к нужной частоте (16 кГц)
+и, если это телефонная запись (8 кГц), почистить её: убрать шум, оставить
+только голосовую полосу частот.
+
+Телефонные записи часто двухканальные: в одном канале слышно одного человека,
+в другом — второго. Поэтому возвращаем все каналы по отдельности — это потом
+помогает понять, кто говорит.
+"""
 import librosa
 import numpy as np
 from scipy import signal
@@ -46,30 +57,7 @@ class AudioLoader:
         else:
             channels = self._prepare_normal(waveform, rate)
 
-        channels = self._maybe_denoise(channels)
         return AudioData(channels, is_phone)
-
-    def _maybe_denoise(self, channels):
-        """Шумоподавление каждого канала (noisereduce). Включается в конфиге."""
-        from transcriber.config.settings import settings
-        if not settings.audio_denoise:
-            return channels
-        try:
-            import noisereduce as nr
-        except ImportError:
-            print("[аудио] noisereduce не установлен, денойз пропущен")
-            return channels
-
-        print("[аудио] шумоподавление каналов...")
-        cleaned = []
-        for i in range(channels.shape[0]):
-            try:
-                ch = nr.reduce_noise(y=channels[i], sr=TARGET_RATE, stationary=False)
-            except Exception as error:
-                print(f"[аудио] денойз канала {i} не удался: {error}")
-                ch = channels[i]
-            cleaned.append(ch.astype(np.float32))
-        return np.stack(cleaned)
 
     def _prepare_normal(self, waveform, rate):
         """Обычное аудио: просто меняем частоту на 16 кГц, если надо."""

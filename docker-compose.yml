@@ -1,24 +1,19 @@
 services:
   transcriber:
     build: .
-    # образ собран через commit (ct2 4.4 + cudnn8), поэтому явно задаём запуск
-    entrypoint: ["/opt/nvidia/nvidia_entrypoint.sh"]
-    command: ["python", "run.py"]
     ports:
       - "8000:8000"
     volumes:
-      - ./OUTPUTS:/app/OUTPUTS                 # готовые разборы
-      - ./models:/models                       # модели (whisper-кэш + GGUF LLM)
-      - ./src:/app/src                         # код (правки без пересборки образа)
-      - ./config:/app/config                   # конфиг (правки без пересборки)
+      - ./OUTPUTS:/app/OUTPUTS    # готовые разборы (папки с JSON)
+      - ./models:/models          # скачанные модели (кешируются между запусками)
+      - ./src:/app/src            # код (правки без пересборки образа)
+      - ./config:/app/config      # конфиг (правки без пересборки)
+      - ./data:/app/data          # БД задач и логов + сохранённые загрузки (переживает перезапуск)
     environment:
       - CONFIG_PATH=config/config.yml
-      # whisper/hf качают сюда же, где уже лежит large-v3
+      - DEVICE=cpu                 # принудительно CPU
+      - WHISPER_MODEL=large-v3     # точность; для скорости: medium / small
       - HUGGINGFACE_HUB_CACHE=/models
       - HF_HOME=/models
-      # cuDNN8/cublas из pip (pywhispercpp собран статически — libggml не светим)
-      - LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cuda_nvrtc/lib
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    # доступ к GPU. На WSL2 надёжнее nvidia-runtime, чем deploy.devices
-    runtime: nvidia
+      - DATA_DIR=/app/data         # где лежат jobs.db и uploads/
+    restart: unless-stopped

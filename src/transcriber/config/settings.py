@@ -54,13 +54,6 @@ class Settings:
         self.whisper_ggml_repo = whisper.get("ggml_repo", "ggerganov/whisper.cpp")
         self.whisper_ggml_model = whisper.get("ggml_model", "ggml-large-v3.bin")
         self.whisper_ggml_path = whisper.get("ggml_path", "/models/ggml-large-v3.bin")
-        # русская дообученная модель -> конвертируется в ct2 (пусто = обычный fallback)
-        self.whisper_ru_model = whisper.get("ru_model", "")
-        self.whisper_ru_ct2_dir = whisper.get("ru_ct2_dir", "/models/whisper-ru-ct2")
-
-        # шумоподавление аудио
-        audio = self.raw.get("audio", {})
-        self.audio_denoise = bool(audio.get("denoise", False))
 
         # настройки llm
         llm = self.raw.get("llm", {})
@@ -68,8 +61,6 @@ class Settings:
         self.llm_repo = llm.get("repo", "")
         self.llm_filename = llm.get("filename", "")
         self.llm_path = llm.get("local_path", "")
-        # LLM чинит транскрипт перед саммари
-        self.llm_correct = bool(llm.get("correct_transcript", False))
 
         # диаризация
         diar = self.raw.get("diarization", {})

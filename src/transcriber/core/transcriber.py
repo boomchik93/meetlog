@@ -1,3 +1,18 @@
+"""
+Распознавание речи (перевод звука в текст).
+
+Главный класс — SpeechRecognizer. Он берёт аудио и возвращает список
+кусочков текста с временами начала и конца.
+
+Важная деталь про время. Whisper умеет распознавать только короткие куски
+(до 30 секунд). Если дать ему длинную запись, он сам её режет, но при этом
+сбивает отсчёт времени — каждый кусок начинает считать с нуля. Из-за этого
+раньше всё ломалось: реплики шли не по порядку.
+
+Решение простое: мы сами находим, где в записи есть речь (через VAD —
+определитель голоса), режем по этим местам и распознаём каждый кусок отдельно.
+А время берём из самой нарезки — оно всегда правильное.
+"""
 import torch
 
 from transcriber.config.settings import settings
@@ -25,10 +40,9 @@ class SpeechRecognizer:
     """Распознаёт речь. Сначала пробует русскую модель, потом запасную."""
 
     def __init__(self):
-        self.hf_model = None        # основная модель (русская, transformers)
+        self.hf_model = None        # основная модель (русская)
         self.hf_processor = None
-        self.fast_model = None      # faster-whisper (ct2)
-        self.fast_name = None       # имя загруженной ct2-модели
+        self.fast_model = None      # запасная модель (faster-whisper)
         self.wcpp = None            # whisper.cpp (GPU)
         self.ready = False
 
@@ -76,25 +90,16 @@ class SpeechRecognizer:
             self.hf_model = None
 
     def _load_backup_model(self):
-        import os
         from faster_whisper import WhisperModel
-        # русская ct2-модель имеет приоритет, если сконвертирована
-        ru_dir = settings.whisper_ru_ct2_dir
-        if settings.whisper_ru_model and os.path.isdir(ru_dir) and os.listdir(ru_dir):
-            name = ru_dir
-            self.fast_name = settings.whisper_ru_model
-            print(f"[распознавание] русская ct2-модель: {settings.whisper_ru_model}")
-        else:
-            name = settings.whisper_fallback
-            self.fast_name = settings.whisper_fallback
-            print(f"[распознавание] гружу модель: {name}")
+        name = settings.whisper_fallback
+        print(f"[распознавание] гружу запасную модель: {name}")
         self.fast_model = WhisperModel(
             name,
             device=settings.whisper_device,
             compute_type=settings.whisper_compute,
             cpu_threads=settings.hardware.cpu_threads,   # все ядра
         )
-        print("[распознавание] модель готова")
+        print("[распознавание] запасная модель готова")
 
     @property
     def model_name(self):
@@ -102,7 +107,7 @@ class SpeechRecognizer:
             return settings.whisper_ggml_model, "whisper.cpp"
         if self.hf_model is not None:
             return settings.whisper_hf_model, "huggingface"
-        return (self.fast_name or settings.whisper_fallback), "faster-whisper"
+        return settings.whisper_fallback, "faster-whisper"
 
     # --- распознавание ---
     def transcribe(self, audio, is_phone=False):

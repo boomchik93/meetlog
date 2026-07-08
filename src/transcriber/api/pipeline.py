@@ -1,3 +1,15 @@
+"""
+Оркестратор — связывает все шаги обработки вместе.
+
+Класс Pipeline загружает все модели один раз, а потом для каждого файла
+проходит цепочку: аудио -> распознавание -> спикеры -> пересказ.
+
+Как определяем спикеров:
+  - если запись телефонная и в ней два канала (и оба звучат), то один
+    канал = один человек. Распознаём каналы отдельно и расставляем спикеров
+    сразу — это просто и точно.
+  - иначе (моно) — используем модель голоса, чтобы понять, кто говорит.
+"""
 import gc
 
 from transcriber.core.audio import AudioLoader
@@ -29,18 +41,10 @@ class Pipeline:
 
     # --- полный проход ---
     def run(self, audio_path):
-        """Транскрибация + (коррекция) + пересказ."""
+        """Транскрибация + пересказ. summary дописывается в общий результат."""
         result = self.process(audio_path)
-
-        # LLM чинит ошибки распознавания, саммари строим по исправленному тексту
-        corrected = None
-        if settings.llm_correct and self.summarizer.ready:
-            corrected = self.summarizer.correct_transcript(result["segments"])
-            if corrected:
-                result["text_corrected"] = corrected
-
         result["summary"] = self.summarizer.summarize(
-            result["segments"], result["speakers"], corrected_text=corrected
+            result["segments"], result["speakers"]
         )
         return result
 

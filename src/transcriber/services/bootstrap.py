@@ -1,3 +1,8 @@
+"""
+Подготовка моделей при первом запуске.
+Whisper и faster-whisper качаются сами при загрузке.
+Тут — только GGUF для LLM: его llama-cpp сама не скачает.
+"""
 import os
 
 from transcriber.config.settings import settings
@@ -5,35 +10,8 @@ from transcriber.config.settings import settings
 
 def ensure_models():
     """Скачать всё, что не качается автоматически."""
-    ensure_ru_model()
     ensure_ggml_model()
     ensure_llm_model()
-
-
-def ensure_ru_model():
-    """Сконвертировать русскую HF-модель Whisper в формат ct2 (один раз)."""
-    if not settings.whisper_ru_model:
-        return
-    out_dir = settings.whisper_ru_ct2_dir
-    if os.path.isdir(out_dir) and os.listdir(out_dir):
-        print(f"[bootstrap] русская ct2-модель на месте: {out_dir}")
-        return
-
-    import subprocess
-    print(f"[bootstrap] конвертирую {settings.whisper_ru_model} -> ct2 int8 (качает ~3 ГБ, разово)")
-    cmd = [
-        "ct2-transformers-converter",
-        "--model", settings.whisper_ru_model,
-        "--output_dir", out_dir,
-        "--quantization", "int8",
-        "--copy_files", "tokenizer.json", "preprocessor_config.json",
-        "--force",
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-        print(f"[bootstrap] русская ct2-модель готова: {out_dir}")
-    except Exception as error:
-        print(f"[bootstrap] конвертация не удалась ({error}); останусь на обычной модели")
 
 
 def ensure_ggml_model():
