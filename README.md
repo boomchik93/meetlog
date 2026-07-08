@@ -111,4 +111,4 @@ hardware:
 
 ## Лицензия
 
-MIT
+MIT — см. файл [LICENSE](LICENSE).
