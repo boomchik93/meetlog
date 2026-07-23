@@ -7,10 +7,10 @@ services:
       - ./OUTPUTS:/app/OUTPUTS    # готовые разборы (папки с JSON)
       - ./models:/models          # скачанные модели (кешируются между запусками)
       - ./transcriber:/app/transcriber   # код (правки без пересборки образа)
-      - ./config:/app/config      # конфиг (правки без пересборки)
+      - ./config.yml:/app/config.yml   # конфиг (правки без пересборки)
       - ./data:/app/data          # БД задач и логов + сохранённые загрузки (переживает перезапуск)
     environment:
-      - CONFIG_PATH=config/config.yml
+      - CONFIG_PATH=config.yml
       - DEVICE=cpu                 # принудительно CPU
       - WHISPER_MODEL=large-v3     # точность; для скорости: medium / small
       - HUGGINGFACE_HUB_CACHE=/models

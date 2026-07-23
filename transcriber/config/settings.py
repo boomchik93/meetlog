@@ -7,7 +7,7 @@ import torch
 
 
 # путь к конфигу можно задать переменной окружения, иначе берём дефолтный
-DEFAULT_CONFIG_PATH = os.getenv("CONFIG_PATH", "config/config.yml")
+DEFAULT_CONFIG_PATH = os.getenv("CONFIG_PATH", "config.yml")
 
 
 class Hardware:

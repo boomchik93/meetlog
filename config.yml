@@ -1,0 +1,44 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "info"
+
+# Описываешь железо — программа сама раскидывает модели по GPU/CPU.
+hardware:
+  device: "auto"        # auto / cuda / mps / cpu
+  vram_gb: 11           # VRAM в ГБ, 0 если нет GPU
+  ram_gb: 30
+  cpu_threads: "auto"   # auto = все ядра
+
+whisper:
+  engine: "faster"      # faster (faster-whisper) / whispercpp (whisper.cpp, GPU)
+
+  # whisper.cpp, ggml-формат
+  ggml_repo: "ggerganov/whisper.cpp"
+  ggml_model: "ggml-large-v3.bin"
+  ggml_path: "/models/ggml-large-v3.bin"
+
+  # Русский дообученный Whisper. На 1080 Ti float16 медленный, поэтому по
+  # умолчанию faster-whisper int8.
+  hf_model: "bond005/whisper-podlodka-turbo"
+  use_hf_model: false
+
+  fallback_model: "medium"   # tiny / base / small / medium / large-v3
+  device: "cpu"              # на 1080 Ti ct2 не работает, держим на CPU
+  compute_type: "auto"       # auto / int8 / int8_float32 / float16 / float32
+  beam_size: 5               # точность vs скорость; не влезаешь в лимит — снижай
+
+llm:
+  enabled: true
+  repo: "bartowski/Qwen2.5-7B-Instruct-GGUF"
+  filename: "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+  local_path: "/models/qwen/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+diarization:
+  enabled: true
+
+# Ручные значения перебивают авто-расчёт. null = считает сама.
+overrides:
+  llm_gpu_layers: null   # слои LLM на GPU; -1 все, 0 только CPU
+  llm_context: 16384
+  llm_threads: null
