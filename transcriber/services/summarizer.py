@@ -20,7 +20,13 @@ RESULT_FIELDS = ["title", "summary", "topics", "decisions", "action_items", "ris
 # у кириллицы с метками SPEAKER ~2.8 символа на токен, а не 4
 CHARS_PER_TOKEN = 2.8
 RESERVE_PROMPT_TOKENS = 1200   # системный промпт + обёртка
-RESERVE_ANSWER_TOKENS = 2048   # ответ модели
+RESERVE_ANSWER_TOKENS = 4096   # ответ модели (подняли, чтобы влезал длинный конспект)
+
+# потолок ответа модели за один вызов
+ANSWER_MAX_TOKENS = 4096
+# на длинной записи один вызов не тянет: режем транскрипт на куски по контексту,
+# каждый пересказываем отдельно (map), потом сводим частичные конспекты (reduce)
+CHUNK_OVERLAP_CHARS = 400   # нахлёст между кусками, чтобы не рвать мысль на границе
 
 
 def _max_transcript_chars():
@@ -63,10 +69,12 @@ SYSTEM_PROMPT = """Ты — аналитик деловых переговоро
 
 Цель: зафиксировать ВСЕ обсуждённые темы без потерь. Тем может быть много — лучше лишняя тема, чем потерянная. Каждое решение, задачу, риск — с конкретикой и именами из разговора.
 
+Объём конспекта должен отражать объём разговора: длинное обсуждение — развёрнутый разбор с множеством тем и тезисов, а не пара общих фраз. Не сжимай и не обобщай в ущерб деталям.
+
 ФОРМАТ ОТВЕТА (СТРОГО JSON):
 {
   "title": "Короткая тема всего обсуждения, 3-6 слов, для названия папки",
-  "summary": "Связное описание сути обсуждения в 2-4 предложениях",
+  "summary": "Связное и подробное описание сути обсуждения: по абзацу на каждый крупный блок разговора, со всеми ключевыми деталями",
   "topics": [
     {
       "title": "Название темы",
@@ -93,6 +101,22 @@ SYSTEM_PROMPT = """Ты — аналитик деловых переговоро
 - Пустая секция (нет решений / задач / рисков) — оставляй [].
 - Только JSON. Без markdown, пояснений и вводного текста.
 - Язык ответа — русский. Тон деловой и безличный."""
+
+
+# промпт свода: на входе несколько частичных конспктов подряд идущих кусков
+# одного разговора, на выходе — один цельный конспект по всему разговору
+REDUCE_PROMPT = """Ты — аналитик деловых переговоров. Тебе дают несколько частичных конспектов — это разборы идущих подряд кусков ОДНОГО длинного разговора.
+
+Задача: свести их в один цельный конспект по всему разговору.
+
+Правила свода:
+- Объедини одинаковые и близкие темы из разных кусков в одну, не теряя ни одного тезиса.
+- Сохрани ВСЕ решения, задачи и риски из всех кусков. Дубли — схлопни, разное — сохрани всё.
+- summary собери заново по всему разговору: подробно, по абзацу на крупный блок. Не сокращай до пары фраз.
+- title — общая тема всего разговора.
+- Имена, цифры, сроки — как в исходных конспектах, ничего не выдумывай.
+
+ФОРМАТ ОТВЕТА — тот же строгий JSON, что и у частичных конспектов (title, summary, topics, decisions, action_items, risks). Только JSON, без markdown и пояснений. Язык — русский."""
 
 
 class Summarizer:
@@ -135,16 +159,84 @@ class Summarizer:
 
     def summarize(self, pieces, speakers=None, corrected_text=None):
         if not self.ready:
-            return dict(EMPTY_RESULT, error="LLM not loaded")
+            return dict(EMPTY_RESULT, error="LLM не загружена")
 
         # если есть исправленный транскрипт — саммари строим по нему
         transcript = corrected_text or self._build_transcript(pieces)
         if len(transcript) < 50:
-            return dict(EMPTY_RESULT, error="Transcript too short")
+            return dict(EMPTY_RESULT, error="Транскрипт слишком короткий")
 
-        transcript = self._clip(transcript)
-        answer = self._ask_model(transcript)
-        return self._parse_answer(answer)
+        limit = _max_transcript_chars()
+        # короткий разговор влезает в контекст целиком — один проход
+        if len(transcript) <= limit:
+            answer = self._ask_model(transcript)
+            return self._parse_answer(answer)
+
+        # длинный разговор не влезает: режем на куски, пересказываем каждый
+        # (map), затем сводим частичные конспекты в один (reduce). Так объём
+        # итога растёт с длиной записи и ничего не теряется за обрезкой.
+        return self._map_reduce(transcript, limit)
+
+    # --- map-reduce для длинных записей ---
+    def _map_reduce(self, transcript, limit):
+        chunks = self._split_transcript(transcript, limit)
+        print(f"[пересказ] длинный транскрипт, кусков для свода: {len(chunks)}")
+
+        partials = []
+        for i, chunk in enumerate(chunks):
+            answer = self._ask_model(chunk)
+            parsed = self._parse_answer(answer)
+            if not parsed.get("error"):
+                partials.append(parsed)
+            else:
+                print(f"[пересказ] кусок {i + 1} не разобран: {parsed.get('error')}")
+
+        if not partials:
+            return dict(EMPTY_RESULT, error="Ни один кусок не удалось пересказать")
+        if len(partials) == 1:
+            return partials[0]
+
+        return self._reduce_partials(partials)
+
+    # режем транскрипт на куски ~limit символов, не разрывая реплики, с нахлёстом
+    def _split_transcript(self, transcript, limit):
+        # запас под нахлёст, чтобы кусок с нахлёстом всё равно влезал в контекст
+        target = max(1000, limit - CHUNK_OVERLAP_CHARS)
+        lines = transcript.split("\n")
+        chunks, cur = [], ""
+        for line in lines:
+            if cur and len(cur) + len(line) > target:
+                chunks.append(cur.strip())
+                # начинаем следующий кусок с хвоста предыдущего (нахлёст)
+                cur = cur[-CHUNK_OVERLAP_CHARS:]
+            cur += line + "\n"
+        if cur.strip():
+            chunks.append(cur.strip())
+        return chunks
+
+    # сводим частичные конспекты в один финальный
+    def _reduce_partials(self, partials):
+        blocks = []
+        for i, part in enumerate(partials):
+            blocks.append(f"=== Конспект куска {i + 1} ===\n"
+                          + json.dumps(part, ensure_ascii=False, indent=2))
+        joined = "\n\n".join(blocks)
+
+        # сам свод тоже может не влезть в контекст — тогда сводим по частям
+        limit = _max_transcript_chars()
+        if len(joined) > limit:
+            mid = len(partials) // 2
+            left = self._reduce_partials(partials[:mid])
+            right = self._reduce_partials(partials[mid:])
+            return self._reduce_partials([left, right])
+
+        user_message = ("Своди частичные конспекты одного разговора в один:\n\n"
+                        + joined)
+        prompt = self._build_prompt(REDUCE_PROMPT, user_message)
+        answer = self._run_llm(prompt)
+        parsed = self._parse_answer(answer)
+        # если свод сорвался — отдаём хотя бы первый кусок, не пустоту
+        return parsed if not parsed.get("error") else partials[0]
 
     # --- LLM-коррекция транскрипта (правит ошибки распознавания) ---
     def correct_transcript(self, pieces):
@@ -272,10 +364,14 @@ class Summarizer:
     def _ask_model(self, transcript):
         user_message = f"Составь структурированный пересказ следующего разговора:\n\n{transcript}"
         prompt = self._build_prompt(SYSTEM_PROMPT, user_message)
+        return self._run_llm(prompt)
+
+    # один вызов модели для пересказа/свода (общий код для map и reduce)
+    def _run_llm(self, prompt):
         try:
             output = self.llm(
                 prompt,
-                max_tokens=2048,
+                max_tokens=ANSWER_MAX_TOKENS,
                 temperature=0.1,
                 top_p=0.9,
                 stop=["<|im_end|>", "<|endoftext|>"],
@@ -302,10 +398,10 @@ class Summarizer:
                 data = self._try_load_json(match.group())
 
         if data is None:
-            return dict(EMPTY_RESULT, error="Failed to parse JSON", raw=raw[:500])
+            return dict(EMPTY_RESULT, error="Не удалось разобрать JSON", raw=raw[:500])
 
         if not any(field in data for field in RESULT_FIELDS):
-            return dict(EMPTY_RESULT, error="Unexpected JSON structure", raw=raw[:500])
+            return dict(EMPTY_RESULT, error="Неожиданная структура JSON", raw=raw[:500])
 
         for field in RESULT_FIELDS:
             data.setdefault(field, "" if field in ("summary", "title") else [])

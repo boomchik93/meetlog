@@ -27,7 +27,7 @@
 ├── run.py                          # точка входа
 ├── config/config.yml               # конфигурация
 ├── Dockerfile / docker-compose.yml
-├── src/transcriber/
+├── transcriber/
 │   ├── config/settings.py          # чтение конфига, распределение ресурсов
 │   ├── core/
 │   │   ├── audio.py                # загрузка и обработка звука
@@ -37,12 +37,11 @@
 │   ├── services/
 │   │   ├── summarizer.py           # суммаризация
 │   │   ├── bootstrap.py            # загрузка моделей при первом запуске
+│   │   ├── jobstore.py             # очередь задач и история в SQLite
 │   │   └── storage.py              # сохранение результатов
 │   └── api/
 │       ├── app.py                  # FastAPI-сервер
 │       └── pipeline.py             # оркестратор пайплайна
-├── deploy/                         # скрипты деплоя
-└── admin/                          # админ-панель (мониторинг сервера)
 ```
 
 ## Запуск (Docker)

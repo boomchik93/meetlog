@@ -6,7 +6,7 @@ services:
     volumes:
       - ./OUTPUTS:/app/OUTPUTS    # готовые разборы (папки с JSON)
       - ./models:/models          # скачанные модели (кешируются между запусками)
-      - ./src:/app/src            # код (правки без пересборки образа)
+      - ./transcriber:/app/transcriber   # код (правки без пересборки образа)
       - ./config:/app/config      # конфиг (правки без пересборки)
       - ./data:/app/data          # БД задач и логов + сохранённые загрузки (переживает перезапуск)
     environment:

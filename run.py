@@ -1,9 +1,3 @@
-import os
-import sys
-
-# чтобы импорты transcriber.* работали при запуске из корня
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-
 import uvicorn
 
 from transcriber.config.settings import settings

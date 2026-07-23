@@ -29,18 +29,10 @@ class Pipeline:
 
     # --- полный проход ---
     def run(self, audio_path):
-        """Транскрибация + (коррекция) + пересказ."""
+        """Транскрибация + пересказ. summary дописывается в общий результат."""
         result = self.process(audio_path)
-
-        # LLM чинит ошибки распознавания, саммари строим по исправленному тексту
-        corrected = None
-        if settings.llm_correct and self.summarizer.ready:
-            corrected = self.summarizer.correct_transcript(result["segments"])
-            if corrected:
-                result["text_corrected"] = corrected
-
         result["summary"] = self.summarizer.summarize(
-            result["segments"], result["speakers"], corrected_text=corrected
+            result["segments"], result["speakers"]
         )
         return result
 

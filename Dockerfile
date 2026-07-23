@@ -3,7 +3,6 @@ FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/src
 
 # python 3.11 + инструменты сборки + ffmpeg для декодирования аудио
 RUN apt-get update && apt-get install -y --no-install-recommends \
