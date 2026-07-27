@@ -10,7 +10,8 @@ def main():
 
     audio = np.load(npy_path).astype(np.float32)
 
-    # импорт здесь — только в воркере, не в основном процессе
+    # импорт только здесь: libggml из pywhispercpp конфликтует с llama.cpp,
+    # поэтому whisper.cpp живёт в отдельном процессе
     from pywhispercpp.model import Model
     model = Model(model_path, print_progress=False, redirect_whispercpp_logs_to=sys.stderr)
     segments = model.transcribe(audio, language="ru")

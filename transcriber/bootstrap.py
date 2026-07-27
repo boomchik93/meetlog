@@ -1,21 +1,20 @@
 """
-Подготовка моделей при первом запуске.
-Whisper и faster-whisper качаются сами при загрузке.
-Тут — только GGUF для LLM: его llama-cpp сама не скачает.
+Докачка моделей при первом запуске.
+
+faster-whisper и transformers тянут веса сами. Здесь — только то, что
+никто не скачает автоматически: GGUF для llama.cpp и ggml для whisper.cpp.
 """
 import os
 
-from transcriber.config.settings import settings
+from transcriber.settings import settings
 
 
 def ensure_models():
-    """Скачать всё, что не качается автоматически."""
     ensure_ggml_model()
     ensure_llm_model()
 
 
 def ensure_ggml_model():
-    """Скачать ggml-модель whisper.cpp, если её нет."""
     if settings.whisper_engine != "whispercpp":
         return
     if os.path.exists(settings.whisper_ggml_path):
@@ -39,7 +38,6 @@ def ensure_ggml_model():
 
 
 def ensure_llm_model():
-    """Скачать GGUF-модель LLM в local_path, если её там нет."""
     if not settings.llm_enabled:
         return
     if os.path.exists(settings.llm_path):

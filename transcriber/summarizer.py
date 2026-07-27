@@ -2,10 +2,10 @@ import json
 import os
 import re
 
-from transcriber.config.settings import settings
+from transcriber.settings import settings
 
 
-# пустой результат отдаём когда что то пошло не так
+# отдаём когда разобрать ответ модели не удалось
 EMPTY_RESULT = {
     "title": "",
     "summary": "",
@@ -20,13 +20,10 @@ RESULT_FIELDS = ["title", "summary", "topics", "decisions", "action_items", "ris
 # у кириллицы с метками SPEAKER ~2.8 символа на токен, а не 4
 CHARS_PER_TOKEN = 2.8
 RESERVE_PROMPT_TOKENS = 1200   # системный промпт + обёртка
-RESERVE_ANSWER_TOKENS = 4096   # ответ модели (подняли, чтобы влезал длинный конспект)
+RESERVE_ANSWER_TOKENS = 4096
 
-# потолок ответа модели за один вызов
 ANSWER_MAX_TOKENS = 4096
-# на длинной записи один вызов не тянет: режем транскрипт на куски по контексту,
-# каждый пересказываем отдельно (map), потом сводим частичные конспекты (reduce)
-CHUNK_OVERLAP_CHARS = 400   # нахлёст между кусками, чтобы не рвать мысль на границе
+CHUNK_OVERLAP_CHARS = 400      # нахлёст, чтобы не рвать мысль на границе кусков
 
 
 def _max_transcript_chars():
@@ -34,22 +31,6 @@ def _max_transcript_chars():
     if budget_tokens < 1000:
         budget_tokens = 1000
     return int(budget_tokens * CHARS_PER_TOKEN)
-
-
-CORRECTION_PROMPT = """Ты — редактор автоматических расшифровок телефонных разговоров.
-Тебе дают фрагмент расшифровки (распознавание речи) с ошибками: искажённые слова, термины, опечатки, бессмысленные обрывки.
-
-Задача: исправить явные ошибки распознавания, опираясь на смысл и контекст разговора. Восстанови правильные термины и слова там, где модель ослышалась.
-
-Правила:
-- Сохрани разметку спикеров (SPEAKER_00:, SPEAKER_01: и т.д.) и порядок реплик.
-- Не добавляй, не выкидывай и не объединяй реплики. Не пересказывай.
-- Чини только слова. Очевидно мусорные обрывки можно убрать.
-- Верни ТОЛЬКО исправленный текст, без пояснений и без markdown."""
-
-
-# на сколько символов резать транскрипт для коррекции (чтобы влезал в контекст)
-CORRECTION_CHUNK_CHARS = 5000
 
 
 SPEAKER_NAMES_PROMPT = """Проанализируй транскрипцию переговоров и определи реальные имена участников.
@@ -103,8 +84,6 @@ SYSTEM_PROMPT = """Ты — аналитик деловых переговоро
 - Язык ответа — русский. Тон деловой и безличный."""
 
 
-# промпт свода: на входе несколько частичных конспктов подряд идущих кусков
-# одного разговора, на выходе — один цельный конспект по всему разговору
 REDUCE_PROMPT = """Ты — аналитик деловых переговоров. Тебе дают несколько частичных конспектов — это разборы идущих подряд кусков ОДНОГО длинного разговора.
 
 Задача: свести их в один цельный конспект по всему разговору.
@@ -135,12 +114,10 @@ class Summarizer:
             print("[пересказ] llama-cpp-python не установлен, пересказ выключен")
             return
 
-        import os
         if not os.path.exists(settings.llm_path):
             print(f"[пересказ] модель не найдена {settings.llm_path}")
             return
 
-        # на CPU 7B-модель не уложится в бюджет времени — предупреждаем
         if settings.llm_gpu_layers == 0:
             print("[пересказ] ВНИМАНИЕ: LLM на CPU (llm_gpu_layers=0), "
                   "пересказ будет медленным. Проверь сборку llama-cpp с CUDA")
@@ -157,27 +134,24 @@ class Summarizer:
         self.ready = True
         print("[пересказ] модель готова")
 
-    def summarize(self, pieces, speakers=None, corrected_text=None):
+    def summarize(self, pieces, speakers=None):
         if not self.ready:
             return dict(EMPTY_RESULT, error="LLM не загружена")
 
-        # если есть исправленный транскрипт — саммари строим по нему
-        transcript = corrected_text or self._build_transcript(pieces)
+        transcript = self._build_transcript(pieces)
         if len(transcript) < 50:
             return dict(EMPTY_RESULT, error="Транскрипт слишком короткий")
 
         limit = _max_transcript_chars()
-        # короткий разговор влезает в контекст целиком — один проход
         if len(transcript) <= limit:
             answer = self._ask_model(transcript)
             return self._parse_answer(answer)
 
-        # длинный разговор не влезает: режем на куски, пересказываем каждый
-        # (map), затем сводим частичные конспекты в один (reduce). Так объём
-        # итога растёт с длиной записи и ничего не теряется за обрезкой.
+        # длинная запись в контекст не влезает: пересказываем по кускам (map),
+        # потом сводим частичные конспекты в один (reduce). Так объём итога
+        # растёт с длиной записи и ничего не теряется на обрезке.
         return self._map_reduce(transcript, limit)
 
-    # --- map-reduce для длинных записей ---
     def _map_reduce(self, transcript, limit):
         chunks = self._split_transcript(transcript, limit)
         print(f"[пересказ] длинный транскрипт, кусков для свода: {len(chunks)}")
@@ -198,23 +172,21 @@ class Summarizer:
 
         return self._reduce_partials(partials)
 
-    # режем транскрипт на куски ~limit символов, не разрывая реплики, с нахлёстом
     def _split_transcript(self, transcript, limit):
-        # запас под нахлёст, чтобы кусок с нахлёстом всё равно влезал в контекст
+        """Куски по ~limit символов, по границам реплик, с нахлёстом."""
+        # запас, чтобы кусок вместе с нахлёстом всё ещё влезал в контекст
         target = max(1000, limit - CHUNK_OVERLAP_CHARS)
         lines = transcript.split("\n")
         chunks, cur = [], ""
         for line in lines:
             if cur and len(cur) + len(line) > target:
                 chunks.append(cur.strip())
-                # начинаем следующий кусок с хвоста предыдущего (нахлёст)
                 cur = cur[-CHUNK_OVERLAP_CHARS:]
             cur += line + "\n"
         if cur.strip():
             chunks.append(cur.strip())
         return chunks
 
-    # сводим частичные конспекты в один финальный
     def _reduce_partials(self, partials):
         blocks = []
         for i, part in enumerate(partials):
@@ -235,52 +207,8 @@ class Summarizer:
         prompt = self._build_prompt(REDUCE_PROMPT, user_message)
         answer = self._run_llm(prompt)
         parsed = self._parse_answer(answer)
-        # если свод сорвался — отдаём хотя бы первый кусок, не пустоту
+        # свод сорвался — отдаём первый кусок, а не пустоту
         return parsed if not parsed.get("error") else partials[0]
-
-    # --- LLM-коррекция транскрипта (правит ошибки распознавания) ---
-    def correct_transcript(self, pieces):
-        if not self.ready:
-            return None
-        transcript = self._build_transcript_with_labels(pieces)
-        if len(transcript) < 50:
-            return None
-
-        chunks = self._split_for_correction(transcript)
-        print(f"[коррекция] чиню транскрипт LLM, кусков: {len(chunks)}")
-        fixed = []
-        for i, chunk in enumerate(chunks):
-            fixed.append(self._correct_chunk(chunk))
-        return "\n".join(p for p in fixed if p).strip() or None
-
-    def _split_for_correction(self, text):
-        # режем по переводам строк, не разрывая реплики, ~CHUNK_CHARS на кусок
-        lines = text.split("\n")
-        chunks, cur = [], ""
-        for line in lines:
-            if cur and len(cur) + len(line) > CORRECTION_CHUNK_CHARS:
-                chunks.append(cur)
-                cur = ""
-            cur += (line + "\n")
-        if cur.strip():
-            chunks.append(cur)
-        return chunks
-
-    def _correct_chunk(self, chunk):
-        prompt = self._build_prompt(CORRECTION_PROMPT, f"Фрагмент расшифровки:\n\n{chunk}")
-        try:
-            output = self.llm(
-                prompt,
-                max_tokens=2048,
-                temperature=0.0,
-                top_p=0.9,
-                stop=["<|im_end|>", "<|endoftext|>"],
-                echo=False,
-            )
-            return self._strip_markdown(output["choices"][0]["text"].strip())
-        except Exception as error:
-            print(f"[коррекция] ошибка куска: {error}")
-            return chunk
 
     def identify_speakers(self, pieces):
         if not self.ready:
@@ -300,8 +228,8 @@ class Summarizer:
             return transcript[:limit] + "\n[...текст обрезан...]"
         return transcript
 
-    # собираем реплики в один текст помечая смену говорящего
     def _build_transcript(self, pieces):
+        """Реплики одним текстом, метка ставится только на смене говорящего."""
         lines = []
         last_speaker = None
         for piece in pieces:
@@ -316,8 +244,8 @@ class Summarizer:
                 lines.append(text)
         return " ".join(lines).strip()
 
-    # тот же транскрипт но с метками SPEAKER_XX для определения имён
     def _build_transcript_with_labels(self, pieces):
+        """То же, но реплики склеены построчно — так модели проще искать имена."""
         lines = []
         last_speaker = None
         for piece in pieces:
@@ -366,7 +294,6 @@ class Summarizer:
         prompt = self._build_prompt(SYSTEM_PROMPT, user_message)
         return self._run_llm(prompt)
 
-    # один вызов модели для пересказа/свода (общий код для map и reduce)
     def _run_llm(self, prompt):
         try:
             output = self.llm(
@@ -381,8 +308,8 @@ class Summarizer:
         except Exception as error:
             return f'{{"error": "{error}"}}'
 
-    # формат сообщений который понимает Qwen
     def _build_prompt(self, system, user):
+        """ChatML — формат, который ждёт Qwen."""
         prompt = f"<|im_start|>system\n{system}<|im_end|>\n"
         prompt += f"<|im_start|>user\n{user}<|im_end|>\n"
         prompt += "<|im_start|>assistant\n"

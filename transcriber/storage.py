@@ -1,7 +1,5 @@
 """
-Сохранение разбора на диск (шаг 4 пайплайна).
-Папка вида: 'разбор обсуждения <тема> от <дд.мм.гггг>'
-Внутри — JSON с транскрибацией и пересказом, по имени исходного аудио.
+Запись результата на диск: OUTPUTS/разбор обсуждения <тема> от <дд.мм.гггг>/<имя аудио>.json
 """
 import json
 import os
@@ -12,12 +10,11 @@ from pathlib import Path
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "OUTPUTS")
 MAX_TITLE_LEN = 60
-# запрещённые в имени файла/папки символы
 BAD_CHARS = r'[\\/:*?"<>|\n\r\t]'
 
 
 def save_result(result, audio_filename, base_dir=OUTPUT_DIR):
-    """Результат пайплайна -> папка с JSON. Возвращает путь к файлу."""
+    """Возвращает путь к записанному JSON."""
     title = _pick_title(result)
     date = datetime.now().strftime("%d.%m.%Y")
     folder = _safe_name(f"разбор обсуждения {title} от {date}")
@@ -36,7 +33,6 @@ def save_result(result, audio_filename, base_dir=OUTPUT_DIR):
 
 
 def _pick_title(result):
-    """Тема для имени папки берётся из summary.title."""
     summary = result.get("summary") or {}
     title = (summary.get("title") or "").strip()
     if not title:

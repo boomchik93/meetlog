@@ -4,16 +4,21 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./OUTPUTS:/app/OUTPUTS    # готовые разборы (папки с JSON)
-      - ./models:/models          # скачанные модели (кешируются между запусками)
-      - ./transcriber:/app/transcriber   # код (правки без пересборки образа)
-      - ./config.yml:/app/config.yml   # конфиг (правки без пересборки)
-      - ./data:/app/data          # БД задач и логов + сохранённые загрузки (переживает перезапуск)
+      - ./OUTPUTS:/app/OUTPUTS            # готовые разборы (папки с JSON)
+      - ./models:/models                  # веса моделей, кешируются между запусками
+      - ./data:/app/data                  # jobs.db, логи и сохранённые загрузки
+      - ./transcriber:/app/transcriber    # код: правки без пересборки образа
+      - ./config.yml:/app/config.yml      # конфиг: правки без пересборки
     environment:
       - CONFIG_PATH=config.yml
-      - DEVICE=cpu                 # принудительно CPU
-      - WHISPER_MODEL=large-v3     # точность; для скорости: medium / small
+      - DATA_DIR=/app/data
       - HUGGINGFACE_HUB_CACHE=/models
       - HF_HOME=/models
-      - DATA_DIR=/app/data         # где лежат jobs.db и uploads/
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped

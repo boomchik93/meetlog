@@ -7,12 +7,11 @@ from datetime import datetime
 from pathlib import Path
 
 
-# папка для БД и загруженных файлов (переживает перезапуск, лежит на volume)
+# лежит на volume, чтобы БД и загрузки переживали перезапуск контейнера
 DATA_DIR = os.getenv("DATA_DIR", "data")
 DB_PATH = os.path.join(DATA_DIR, "jobs.db")
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 
-# статусы задачи
 QUEUED = "queued"
 PROCESSING = "processing"
 DONE = "done"
@@ -70,8 +69,6 @@ class JobStore:
             )
             self._conn.commit()
 
-    # --- задачи ---
-
     def create_job(self, filename, upload_path):
         job_id = str(uuid.uuid4())
         with self._lock:
@@ -113,16 +110,7 @@ class JobStore:
         return self._row_to_job(row) if row else None
 
     def active_jobs(self):
-        # задачи в очереди или в работе — для вкладки процессов
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM jobs WHERE status IN (?, ?) ORDER BY submitted_at",
-                (QUEUED, PROCESSING),
-            ).fetchall()
-        return [self._row_to_job(r) for r in rows]
-
-    def unfinished_jobs(self):
-        # незавершённые задачи для восстановления при старте, сначала старые
+        """Задачи в очереди и в работе, от старых к новым."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE status IN (?, ?) ORDER BY submitted_at",
@@ -131,7 +119,6 @@ class JobStore:
         return [self._row_to_job(r) for r in rows]
 
     def requeue(self, job_id):
-        # вернуть прерванную задачу обратно в очередь
         with self._lock:
             self._conn.execute(
                 "UPDATE jobs SET status=?, started_at=NULL WHERE id=?",
@@ -144,8 +131,6 @@ class JobStore:
         job["result"] = json.loads(job["result_json"]) if job.get("result_json") else None
         job.pop("result_json", None)
         return job
-
-    # --- журнал ---
 
     def log(self, message, level="info", tag=None, job_id=None):
         with self._lock:

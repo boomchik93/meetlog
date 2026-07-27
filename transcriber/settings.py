@@ -1,20 +1,17 @@
-# загрузка конфига и распределение ресурсов под железо
-# Settings читает config.yml, смотрит на gpu/память и решает куда класть модели
 import os
 
 import yaml
 import torch
 
 
-# путь к конфигу можно задать переменной окружения, иначе берём дефолтный
 DEFAULT_CONFIG_PATH = os.getenv("CONFIG_PATH", "config.yml")
 
 
 class Hardware:
     def __init__(self, device, vram_gb, ram_gb, cpu_threads):
-        self.device = device          # "cuda", "mps" или "cpu"
-        self.vram_gb = vram_gb        # видеопамять в гигабайтах
-        self.ram_gb = ram_gb          # оперативная память в гигабайтах
+        self.device = device
+        self.vram_gb = vram_gb
+        self.ram_gb = ram_gb
         self.cpu_threads = cpu_threads
 
     @property
@@ -31,16 +28,13 @@ class Settings:
         self.config_path = config_path
         self.raw = self._read_file(config_path)
 
-        # разбираем железо
         self.hardware = self._detect_hardware(self.raw.get("hardware", {}))
 
-        # настройки сервера
         server = self.raw.get("server", {})
         self.host = server.get("host", "0.0.0.0")
         self.port = int(os.getenv("PORT", server.get("port", 8000)))
         self.log_level = server.get("log_level", "info")
 
-        # настройки whisper
         whisper = self.raw.get("whisper", {})
         self.whisper_hf_model = whisper.get("hf_model", "bond005/whisper-podlodka-turbo")
         self.whisper_use_hf = whisper.get("use_hf_model", True)
@@ -49,28 +43,23 @@ class Settings:
         self.whisper_compute_cfg = whisper.get("compute_type", "auto")
         # whisper можно увести на cpu отдельно от LLM (для старых GPU)
         self.whisper_device_cfg = whisper.get("device", "auto")
-        # движок распознавания и модель whisper.cpp
         self.whisper_engine = whisper.get("engine", "whispercpp")
         self.whisper_ggml_repo = whisper.get("ggml_repo", "ggerganov/whisper.cpp")
         self.whisper_ggml_model = whisper.get("ggml_model", "ggml-large-v3.bin")
         self.whisper_ggml_path = whisper.get("ggml_path", "/models/ggml-large-v3.bin")
 
-        # настройки llm
         llm = self.raw.get("llm", {})
         self.llm_enabled = llm.get("enabled", True)
         self.llm_repo = llm.get("repo", "")
         self.llm_filename = llm.get("filename", "")
         self.llm_path = llm.get("local_path", "")
 
-        # диаризация
         diar = self.raw.get("diarization", {})
         self.diarization_enabled = diar.get("enabled", True)
 
-        # считаем параметры моделей под железо, затем применяем overrides
         self._plan_resources()
         self._apply_overrides(self.raw.get("overrides", {}))
 
-    # --- чтение файла ---
     def _read_file(self, path):
         if not os.path.exists(path):
             print(f"[настройки] конфиг {path} не найден, беру значения по умолчанию")
@@ -78,9 +67,7 @@ class Settings:
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
-    # --- определение железа ---
     def _detect_hardware(self, cfg):
-        # DEVICE из окружения перебивает конфиг (удобно при запуске)
         device = os.getenv("DEVICE", cfg.get("device", "auto"))
         if device == "auto":
             device = self._auto_device()
@@ -92,7 +79,6 @@ class Settings:
         vram_gb = float(cfg.get("vram_gb", 0))
         ram_gb = float(cfg.get("ram_gb", 16))
 
-        # если выбрали cuda, но видеопамять не указали — попробуем спросить у GPU
         if device == "cuda" and vram_gb == 0:
             vram_gb = self._read_gpu_vram()
 
@@ -101,10 +87,9 @@ class Settings:
         return hw
 
     def _pick_compute(self):
-        # ручной выбор из конфига имеет приоритет
         if self.whisper_compute_cfg != "auto":
             return self.whisper_compute_cfg
-        # на старых GPU (Pascal, cc<7) float16 медленный — берём int8
+        # на Pascal и старше (cc<7) float16 медленнее int8
         try:
             major = torch.cuda.get_device_capability(0)[0]
         except Exception:
@@ -125,13 +110,9 @@ class Settings:
         except Exception:
             return 0.0
 
-    # --- распределение ресурсов под железо ---
     def _plan_resources(self):
         hw = self.hardware
 
-        # 1. Куда положить Whisper.
-        # Whisper небольшой (~1.6 ГБ), кладём на GPU если он есть.
-        # whisper.device может принудительно перебить общий выбор
         if self.whisper_device_cfg != "auto":
             use_gpu = self.whisper_device_cfg == "cuda"
         else:
@@ -142,25 +123,21 @@ class Settings:
             self.whisper_compute = self._pick_compute()
             self.whisper_dtype = torch.float16 if self.whisper_compute == "float16" else torch.float32
         else:
-            # на mac (mps) faster-whisper всё равно работает через cpu
+            # на mps faster-whisper всё равно уходит на cpu
             self.whisper_device = "cpu"
             self.whisper_compute = self.whisper_compute_cfg if self.whisper_compute_cfg != "auto" else "int8"
             self.whisper_dtype = torch.float32
 
-        # 2. Сколько слоёв LLM положить на GPU.
-        # LLM большая (~6.5 ГБ с контекстом). Кладём на GPU, только если
-        # видеопамяти заметно больше, чем нужно Whisper'у.
+        # LLM ~6.5 ГБ с контекстом, кладём целиком только если VRAM хватает
+        # и Whisper'у после неё что-то останется
         if hw.has_gpu and hw.vram_gb >= 10:
-            self.llm_gpu_layers = -1   # вся модель на GPU
+            self.llm_gpu_layers = -1
         elif hw.has_gpu and hw.vram_gb >= 6:
-            self.llm_gpu_layers = 20   # часть слоёв на GPU
+            self.llm_gpu_layers = 20
         else:
-            self.llm_gpu_layers = 0    # только процессор
+            self.llm_gpu_layers = 0
 
-        # 3. Размер контекста LLM.
-        # Большой контекст ест много памяти, а нам столько не нужно:
-        # транскрипт разговора всё равно обрезается. Считаем по свободной
-        # памяти — это то, что осталось после весов самой модели (~5 ГБ).
+        # контекст считаем по памяти, оставшейся после весов модели (~5 ГБ)
         total_memory = hw.vram_gb if self.llm_gpu_layers != 0 else hw.ram_gb
         free_memory = total_memory - 5
         if free_memory >= 12:
@@ -170,14 +147,12 @@ class Settings:
         else:
             self.llm_context = 4096
 
-        # 4. Потоки для LLM. На GPU потоки почти не важны, на CPU — берём все.
         self.llm_threads = hw.cpu_threads
 
         print(f"[настройки] план: whisper на {self.whisper_device}, "
               f"llm_gpu_layers={self.llm_gpu_layers}, "
               f"llm_context={self.llm_context}, llm_threads={self.llm_threads}")
 
-    # --- ручные переопределения ---
     def _apply_overrides(self, overrides):
         gpu_layers = overrides.get("llm_gpu_layers")
         if gpu_layers is not None:
@@ -195,5 +170,4 @@ class Settings:
             print(f"[настройки] override: llm_threads={self.llm_threads}")
 
 
-# один общий объект настроек на весь проект
 settings = Settings()

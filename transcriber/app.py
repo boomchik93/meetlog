@@ -10,9 +10,9 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from transcriber.api.pipeline import Pipeline
-from transcriber.services import bootstrap, storage
-from transcriber.services.jobstore import store
+from transcriber.pipeline import Pipeline
+from transcriber import bootstrap, storage
+from transcriber.jobstore import store
 
 ALLOWED_EXT = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -20,7 +20,8 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "OUTPUTS")
 
 pipeline = Pipeline()
 
-# очередь в памяти, но каждая задача продублирована в БД (store)
+# очередь живёт в памяти, но каждая задача продублирована в БД (store),
+# поэтому перезапуск её не теряет — см. _recover_unfinished
 job_queue: asyncio.Queue = asyncio.Queue()
 
 
@@ -48,7 +49,6 @@ async def worker():
             store.mark_error(job_id, str(e))
             _log(f"[очередь] ошибка: {e}", tag="очередь", job_id=job_id, level="error")
         finally:
-            # исходник больше не нужен — удаляем сохранённую загрузку
             try:
                 os.unlink(upload_path)
             except OSError:
@@ -57,8 +57,8 @@ async def worker():
 
 
 def _recover_unfinished():
-    # при старте возвращаем в очередь задачи, прерванные перезапуском
-    pending = store.unfinished_jobs()
+    """Возвращает в очередь задачи, прерванные перезапуском."""
+    pending = store.active_jobs()
     if not pending:
         return
     recovered, dropped = 0, 0
@@ -69,8 +69,7 @@ def _recover_unfinished():
             job_queue.put_nowait((job["id"], upload, job["filename"]))
             recovered += 1
         else:
-            # исходник не сохранился (старые задачи до персистентности) —
-            # не теряем молча, помечаем ошибкой, чтобы было видно в истории
+            # исходник не сохранился — помечаем ошибкой, чтобы не пропало молча
             store.mark_error(job["id"], "исходный файл недоступен после перезапуска")
             dropped += 1
     _log(
@@ -115,7 +114,7 @@ async def transcribe(file: UploadFile = File(...)):
         raise HTTPException(400, f"формат {ext} не поддерживается")
 
     original_name = file.filename or "запись"
-    # сохраняем загрузку в постоянную папку (не /tmp): переживёт перезапуск
+    # не /tmp: файл должен пережить перезапуск, иначе задачу не восстановить
     upload_path = os.path.join(store.uploads_dir, f"{uuid.uuid4().hex}{ext}")
     with open(upload_path, "wb") as dst:
         shutil.copyfileobj(file.file, dst)
@@ -147,7 +146,6 @@ def job_status(job_id: str):
 
 @app.get("/api/jobs")
 def jobs_list():
-    # активные задачи (в очереди и в работе) для вкладки процессов
     return JSONResponse(store.active_jobs())
 
 
@@ -158,7 +156,7 @@ def logs(limit: int = 200, job_id: str = None):
 
 @app.get("/api/history")
 def history():
-    """Список всех обработанных файлов из папки OUTPUTS."""
+    """Обработанные файлы из OUTPUTS, новые сверху."""
     out = Path(OUTPUT_DIR)
     items = []
     if out.exists():
@@ -166,7 +164,6 @@ def history():
             try:
                 stat = json_file.stat()
                 rel = str(json_file.relative_to(out))
-                # берём краткий summary из файла без загрузки всего
                 data = json.loads(json_file.read_text(encoding="utf-8"))
                 summary = data.get("summary") or {}
                 items.append({
@@ -185,9 +182,9 @@ def history():
 
 @app.get("/api/history/download")
 def download_result(path: str):
-    """Скачать JSON-файл из OUTPUTS по относительному пути."""
+    """JSON из OUTPUTS по относительному пути."""
     safe = Path(OUTPUT_DIR) / Path(path)
-    # защита от path traversal
+    # relative_to бросит ValueError, если path вылез за пределы OUTPUTS
     try:
         safe = safe.resolve()
         base = Path(OUTPUT_DIR).resolve()

@@ -11,8 +11,9 @@ models/
 *.bin
 *.pt
 
-# Результаты
+# Результаты и состояние
 OUTPUTS/
+data/
 
 # IDE
 .idea/
@@ -22,13 +23,6 @@ OUTPUTS/
 # OS
 .DS_Store
 Thumbs.db
-
-# Node (admin panel)
-node_modules/
-dist/
-
-# Docker
-*.tar.gz
 
 # Secrets
 .env
